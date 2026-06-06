@@ -49,6 +49,6 @@ mono_prior:
 data:
   dataset_root: /home/leizongru/lzr_ws/railway_data
   input_folder: scene_05_train
-  output: /home/leizongru/lzr_ws/Splat-SLAM/output/Railway
+  output: /home/leizongru/lzr_ws/Splat-SLAM/output
   gt_pose_root: /home/leizongru/lzr_ws/railway_data/gt_poses
   gt_pose_tolerance_sec: 0.05

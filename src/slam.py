@@ -26,6 +26,7 @@ from src.utils.common import setup_seed,update_cam
 from src.utils.Printer import Printer,FontColor
 from src.utils.eval_traj import kf_traj_eval,full_traj_eval
 from src.utils.eval_utils import eval_rendering
+from src.utils.railway_export import export_railway_outputs
 from src.utils.datasets import BaseDataset
 from src.tracker import Tracker
 from src.mapper import Mapper
@@ -260,6 +261,13 @@ class SLAM:
                        f"{self.save_dir}/traj",
                        "full_traj",
                        self.stream, self.logger, self.printer)
+
+        if self.cfg.get('dataset') == 'railway':
+            if self.only_tracking:
+                self.printer.print("Skip railway clean export: mapping was not run.", FontColor.EVAL)
+            else:
+                export_info = export_railway_outputs(self, self.mapper, self.stream)
+                self.printer.print(f"Railway clean outputs saved to {export_info['save_dir']}", FontColor.EVAL)
 
         self.printer.print("Metrics Evaluation Done!",FontColor.EVAL)
 

@@ -18,6 +18,8 @@ wandb
 cull_replica_mesh
 *.egg*
 euler/
-output/
+output/*
+!output/
+!output/SAVE_CONVENTIONS.md
 logs/
 zongru_modified.txt
