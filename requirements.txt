@@ -2,6 +2,7 @@ pillow
 imageio
 joblib
 pandas
+pyarrow
 scikit-image
 scikit-learn
 scipy
@@ -10,16 +11,12 @@ PyOpenGL-accelerate
 pyrender
 ninja
 setuptools
-torch-scatter
 timm
 plyfile==0.8.1
 tqdm
-opencv-python==4.8.1.78
 munch
 trimesh
 evo
-open3d==0.17.0
-torchmetrics
 imgviz
 lpips
 rich

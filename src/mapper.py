@@ -904,6 +904,7 @@ class Mapper(object):
             c2w_gt = c2w_gt.to(self.device) 
             depth_gt_numpy = depth_gt.numpy()
             depth_gt = depth_gt.to(self.device)
+            w2c_gt = torch.linalg.inv(c2w_gt)
 
             depth, w2c, invalid = self.get_w2c_and_depth(video_idx, idx, mono_depth, depth_gt_numpy, init=False)
 
@@ -925,7 +926,6 @@ class Mapper(object):
                 self.pipe.send("continue")
                 continue # too few valid pixels from droid depth
             
-            w2c_gt = torch.linalg.inv(c2w_gt)
             self.gt_w2c_all_frames.append(w2c_gt)
 
             # online glorieslam pose and depth

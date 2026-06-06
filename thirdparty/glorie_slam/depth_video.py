@@ -25,7 +25,7 @@ from src.utils.common import align_scale_and_shift
 from src.utils.Printer import FontColor
 
 class DepthVideo:
-    ''' store the estimated poses and depth maps, 
+    ''' store the estimated poses and depth maps,
         shared between tracker and mapper '''
     def __init__(self, cfg, printer):
         self.cfg =cfg
@@ -41,29 +41,29 @@ class DepthVideo:
         self.device = cfg['device']
         self.down_scale = 8
         ### state attributes ###
-        self.timestamp = torch.zeros(buffer, device=self.device, dtype=torch.float).share_memory_()
+        # These tensors can be shared on CPU as they're not frequently used in GPU computations
+        self.timestamp = torch.zeros(buffer, dtype=torch.float).share_memory_()
+        self.dirty = torch.zeros(buffer, dtype=torch.bool).share_memory_()
+        self.npc_dirty = torch.zeros(buffer, dtype=torch.bool).share_memory_()
+        self.depth_scale = torch.zeros(buffer, dtype=torch.float).share_memory_()
+        self.depth_shift = torch.zeros(buffer, dtype=torch.float).share_memory_()
+
+        # These tensors need to be on GPU for frequent computations, but also need sharing
+        # We'll create them on GPU but handle sharing differently
         self.images = torch.zeros(buffer, 3, ht, wd, device=self.device, dtype=torch.uint8)
-
-        # whether the valid_depth_mask is calculated/updated, if dirty, not updated, otherwise, updated
-        self.dirty = torch.zeros(buffer, device=self.device, dtype=torch.bool).share_memory_() 
-        # whether the corresponding part of pointcloud is deformed w.r.t. the poses and depths 
-        self.npc_dirty = torch.zeros(buffer, device=self.device, dtype=torch.bool).share_memory_()
-
-        self.poses = torch.zeros(buffer, 7, device=self.device, dtype=torch.float).share_memory_()
-        self.disps = torch.ones(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.float).share_memory_()
-        self.zeros = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.float).share_memory_()
-        self.disps_up = torch.zeros(buffer, ht, wd, device=self.device, dtype=torch.float).share_memory_()
-        self.intrinsics = torch.zeros(buffer, 4, device=self.device, dtype=torch.float).share_memory_()
-        self.mono_disps = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.float).share_memory_()
-        self.depth_scale = torch.zeros(buffer,device=self.device, dtype=torch.float).share_memory_()
-        self.depth_shift = torch.zeros(buffer,device=self.device, dtype=torch.float).share_memory_()
-        self.valid_depth_mask = torch.zeros(buffer, ht, wd, device=self.device, dtype=torch.bool).share_memory_()
-        self.valid_depth_mask_small = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.bool).share_memory_()        
+        self.poses = torch.zeros(buffer, 7, device=self.device, dtype=torch.float)
+        self.disps = torch.ones(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.float)
+        self.zeros = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.float)
+        self.disps_up = torch.zeros(buffer, ht, wd, device=self.device, dtype=torch.float)
+        self.intrinsics = torch.zeros(buffer, 4, device=self.device, dtype=torch.float)
+        self.mono_disps = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.float)
+        self.valid_depth_mask = torch.zeros(buffer, ht, wd, device=self.device, dtype=torch.bool)
+        self.valid_depth_mask_small = torch.zeros(buffer, ht//self.down_scale, wd//self.down_scale, device=self.device, dtype=torch.bool)
 
         ### feature attributes ###
-        self.fmaps = torch.zeros(buffer, 1, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device).share_memory_()
-        self.nets = torch.zeros(buffer, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device).share_memory_()
-        self.inps = torch.zeros(buffer, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device).share_memory_()
+        self.fmaps = torch.zeros(buffer, 1, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device)
+        self.nets = torch.zeros(buffer, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device)
+        self.inps = torch.zeros(buffer, 128, ht//self.down_scale, wd//self.down_scale, dtype=torch.half, device=self.device)
 
         # initialize poses to identity transformation
         self.poses[:] = torch.as_tensor([0, 0, 0, 0, 0, 0, 1], dtype=torch.float, device=self.device)
@@ -75,7 +75,7 @@ class DepthVideo:
     def __item_setter(self, index, item):
         if isinstance(index, int) and index >= self.counter.value:
             self.counter.value = index + 1
-        
+
         elif isinstance(index, torch.Tensor) and index.max().item() > self.counter.value:
             self.counter.value = index.max().item() + 1
 
@@ -90,7 +90,7 @@ class DepthVideo:
 
 
         if item[4] is not None:
-            
+
             mono_depth = item[4][self.down_scale//2-1::self.down_scale,
                                  self.down_scale//2-1::self.down_scale]
             self.mono_disps[index] = torch.where(mono_depth>0, 1.0/mono_depth, 0)
@@ -185,7 +185,7 @@ class DepthVideo:
             return_matrix = True
             N = self.counter.value
             ii, jj = torch.meshgrid(torch.arange(N), torch.arange(N),indexing="ij")
-        
+
         ii, jj = DepthVideo.format_indicies(ii, jj)
 
         if bidirectional:
@@ -210,8 +210,8 @@ class DepthVideo:
         return d
 
     def dspo(self, target, weight, eta, ii, jj, t0=1, t1=None, itrs=2, lm=1e-4, ep=0.1, motion_only=False, opt_type="pose_depth"):
-        """ Disparity, Scale and Pose Optimization (DSPO) layer, 
-            checked the paper (and supplementary) for detailed explanation 
+        """ Disparity, Scale and Pose Optimization (DSPO) layer,
+            checked the paper (and supplementary) for detailed explanation
 
             opt_type: "pose_depth",  stage 1, optimize camera poses and disparity maps together, eq.16 in the paper,
                                               same as DBA
@@ -236,8 +236,8 @@ class DepthVideo:
             elif opt_type == "depth_scale":
                 poses = lietorch.SE3(self.poses[None])
                 disps = self.disps[None]
-                scales = self.depth_scale
-                shifts = self.depth_shift
+                scales = self.depth_scale.clone().to(self.device)
+                shifts = self.depth_shift.clone().to(self.device)
                 ignore_frames = 0
                 self.update_valid_depth_mask(up=False)
                 curr_idx = self.counter.value-1
@@ -258,14 +258,14 @@ class DepthVideo:
                     invalid_mono_mask = (error_t/avg_disps > self.mono_thres)| \
                                         (error_t.isnan())|\
                                         (scale_t < 0)|\
-                                        (valid_d.sum(dim=[1,2]) < 
+                                        (valid_d.sum(dim=[1,2]) <
                                         valid_d.shape[1]*valid_d.shape[2]*0.5)
                     invalid_mono_index, = torch.where(invalid_mono_mask.clone())
                     invalid_ii_mask = (ii<0)
                     idx_in_ii = torch.unique(ii)
                     valid_eta_mask = (idx_in_ii >= 0)
                     for idx in invalid_mono_index:
-                        invalid_ii_mask =  invalid_ii_mask | (ii == idx) | (jj == idx) 
+                        invalid_ii_mask =  invalid_ii_mask | (ii == idx) | (jj == idx)
                     target_t = target[:,~invalid_ii_mask]
                     weight_t = weight[:,~invalid_ii_mask]
                     ii_t = ii[~invalid_ii_mask]
@@ -287,10 +287,11 @@ class DepthVideo:
                         )
                         scales = wqs[0,:,0]
                         shifts = wqs[0,:,1]
-                        success = True                    
+                        success = True
 
-                self.depth_scale = scales
-                self.depth_shift = shifts
+                # Copy results back to CPU shared memory
+                self.depth_scale.copy_(scales[:self.depth_scale.shape[0]].cpu())
+                self.depth_shift.copy_(shifts[:self.depth_shift.shape[0]].cpu())
 
                 self.disps = disps.squeeze(0)
                 self.poses = poses.vec().squeeze(0)
@@ -336,11 +337,11 @@ class DepthVideo:
             depth_mask = self.valid_depth_mask[index].clone().to(device)
             c2w = self.get_pose(index,device)
         return est_depth, depth_mask, c2w
-    
+
     @torch.no_grad()
     def update_valid_depth_mask(self,up=True):
         '''
-        For each pixel, check whether the estimated depth value is valid or not 
+        For each pixel, check whether the estimated depth value is valid or not
         by the two-view consistency check, see eq.4 ~ eq.7 in the paper for details
 
         up (bool): if True, check on the orignial-scale depth map
@@ -351,6 +352,8 @@ class DepthVideo:
                 dirty_index, = torch.where(self.dirty.clone())
             if len(dirty_index) == 0:
                 return
+            # Move dirty_index to the same device as the tensors we'll index
+            dirty_index = dirty_index.to(self.device)
         else:
             curr_idx = self.counter.value-1
             dirty_index = torch.arange(curr_idx+1).to(self.device)
@@ -359,20 +362,20 @@ class DepthVideo:
         common_intrinsic_id = 0  # we assume the intrinsics are the same within one scene
         intrinsic = self.intrinsics[common_intrinsic_id].detach() * (self.down_scale if up else 1.0)
         depths = 1.0/disps
-        thresh = self.cfg['tracking']['multiview_filter']['thresh'] * depths.mean(dim=[1,2]) 
+        thresh = self.cfg['tracking']['multiview_filter']['thresh'] * depths.mean(dim=[1,2])
         count = droid_backends.depth_filter(
             self.poses, self.disps_up if up else self.disps, intrinsic, dirty_index, thresh)
         filter_visible_num = self.cfg['tracking']['multiview_filter']['visible_num']
-        multiview_masks = (count >= filter_visible_num) 
+        multiview_masks = (count >= filter_visible_num)
         depths[~multiview_masks]=torch.nan
         depths_reshape = depths.view(depths.shape[0],-1)
         depths_median = depths_reshape.nanmedian(dim=1).values
         masks = depths < 3*depths_median[:,None,None]
         if up:
-            self.valid_depth_mask[dirty_index] = masks 
+            self.valid_depth_mask[dirty_index] = masks
             self.dirty[dirty_index] = False
         else:
-            self.valid_depth_mask_small[dirty_index] = masks 
+            self.valid_depth_mask_small[dirty_index] = masks
 
     def set_dirty(self,index_start, index_end):
         self.dirty[index_start:index_end] = True
@@ -392,8 +395,8 @@ class DepthVideo:
             valid_depth_masks.append(depth_mask)
         poses = torch.stack(poses,dim=0).numpy()
         depths = torch.stack(depths,dim=0).numpy()
-        timestamps = torch.stack(timestamps,dim=0).numpy() 
-        valid_depth_masks = torch.stack(valid_depth_masks,dim=0).numpy()       
+        timestamps = torch.stack(timestamps,dim=0).numpy()
+        valid_depth_masks = torch.stack(valid_depth_masks,dim=0).numpy()
         np.savez(path,poses=poses,depths=depths,timestamps=timestamps,valid_depth_masks=valid_depth_masks)
         self.printer.print(f"Saved final depth video: {path}",FontColor.INFO)
 

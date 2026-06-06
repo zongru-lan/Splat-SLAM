@@ -48,6 +48,10 @@ def eval_rendering(
     gt_mesh_path=None
 ):  
     dataset = mapper.frame_reader
+    has_gt_depth = getattr(dataset, 'has_gt_depth', True)
+    if mesh and not has_gt_depth:
+        print('Disabling mesh extraction because the dataset has no GT depth.')
+        mesh = False
     frames = mapper.cameras
     gaussians = mapper.gaussians
     background = mapper.background
@@ -112,13 +116,18 @@ def eval_rendering(
         depth = depth.detach().cpu()
         
 
-        # compute depth errors
-        depth_mask = (depth > 0) * (gt_depth > 0)
         depth = global_scale*depth
-        diff_depth_l1 = torch.abs(depth - gt_depth)
-        diff_depth_l1_gt = diff_depth_l1 * depth_mask
-        depth_l1_gt = diff_depth_l1_gt.sum() / depth_mask.sum()
-        depth_l1_array.append(depth_l1_gt)
+        if has_gt_depth:
+            # compute depth errors
+            depth_mask = (depth > 0) * (gt_depth > 0)
+            diff_depth_l1 = torch.abs(depth - gt_depth)
+            diff_depth_l1_gt = diff_depth_l1 * depth_mask
+            depth_l1_gt = diff_depth_l1_gt.sum() / depth_mask.sum()
+            depth_l1_array.append(depth_l1_gt.item())
+            depth_l1_plot = depth_l1_gt
+        else:
+            diff_depth_l1_gt = torch.zeros_like(depth)
+            depth_l1_plot = float('nan')
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
@@ -131,7 +140,7 @@ def eval_rendering(
         # Add plotting 2x3 grid here
         plot_dir = save_dir + "/plots_" + iteration
         plot_rgbd_silhouette(gt_image, gt_depth, image, depth, diff_depth_l1_gt,
-                                 psnr_score.item(), depth_l1_gt, plot_dir=plot_dir, idx='video_idx_' + str(video_idx) + "_kf_idx_" + str(kf_idx),
+                                 psnr_score.item(), depth_l1_plot, plot_dir=plot_dir, idx='video_idx_' + str(video_idx) + "_kf_idx_" + str(kf_idx),
                                  diff_rgb=np.abs(gt - pred))
 
         # do volumetric TSDF fusion from which the mesh will be extracted later
@@ -191,7 +200,8 @@ def eval_rendering(
     output["mean_ssim"] = float(np.mean(ssim_array))
     output["mean_lpips"] = float(np.mean(lpips_array))
     # rendering depth l1 error
-    output["mean_depthl1"] = float(np.mean(depth_l1_array)) 
+    output["mean_depthl1"] = float(np.mean(depth_l1_array)) if has_gt_depth else None
+    output["depth_eval"] = "computed" if has_gt_depth else "skipped_no_gt_depth"
 
     print(
         f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}, depth l1: {output["mean_depthl1"]}', #, depth l1 sensor: {output["mean_depthl1_sensor"]}, depth l1 to sensor: {output["mean_depthl1_to_sensor"]}', 

@@ -385,9 +385,164 @@ class TUM_RGBD(BaseDataset):
         return pose
 
 
+class RailwayDataset(BaseDataset):
+    def __init__(self, cfg, device='cuda:0'):
+        super(RailwayDataset, self).__init__(cfg, device)
+        stride = cfg['stride']
+        max_frames = cfg['max_frames']
+        if max_frames < 0:
+            max_frames = int(1e5)
+
+        self.color_paths = self._load_color_paths(self.input_folder)
+        self.color_paths = self.color_paths[:max_frames][::stride]
+        self.n_img = len(self.color_paths)
+        if self.n_img == 0:
+            raise FileNotFoundError(f'No railway RGB images found in {self.input_folder}')
+
+        self.depth_paths = None
+        self.frame_ids = [self._frame_id_from_path(path) for path in self.color_paths]
+        self.image_names = [os.path.basename(path) for path in self.color_paths]
+        self.image_timestamps = np.asarray(
+            [self._timestamp_from_path(path, idx) for idx, path in enumerate(self.color_paths)],
+            dtype=np.float64,
+        )
+        self.has_gt_depth = False
+        self.poses = self._load_gt_poses(cfg)
+        self.w2c_first_pose = np.linalg.inv(self.poses[0])
+        print('INFO: {} railway images got from {}.'.format(self.n_img, self.input_folder))
+
+    def _load_color_paths(self, folder):
+        patterns = ['*.png', '*.jpg', '*.jpeg', '*.bmp']
+        image_dirs = [folder, os.path.join(folder, 'rgb')]
+        paths = []
+        for image_dir in image_dirs:
+            for pattern in patterns:
+                paths.extend(glob.glob(os.path.join(image_dir, pattern)))
+                paths.extend(glob.glob(os.path.join(image_dir, pattern.upper())))
+        paths = sorted(set(paths), key=self._image_sort_key)
+        return paths
+
+    def _image_sort_key(self, path):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        frame_id = stem.split('_', 1)[0]
+        try:
+            return (0, int(frame_id), stem)
+        except ValueError:
+            return (1, stem)
+
+    def _frame_id_from_path(self, path):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        return stem.split('_', 1)[0]
+
+    def _timestamp_from_path(self, path, fallback):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if '_' in stem:
+            token = stem.rsplit('_', 1)[-1]
+            try:
+                return float(token)
+            except ValueError:
+                pass
+        return float(fallback)
+
+    def _gt_pose_path(self, cfg):
+        data_cfg = cfg.get('data', {})
+        gt_pose_root = data_cfg.get(
+            'gt_pose_root',
+            os.path.join(data_cfg['dataset_root'], 'gt_poses'),
+        )
+        scene_name = cfg.get('scene') or os.path.basename(os.path.normpath(self.input_folder))
+        return os.path.join(gt_pose_root, f'{scene_name}.parquet')
+
+    def _load_gt_poses(self, cfg):
+        import pandas as pd
+        from scipy.spatial.transform import Rotation
+
+        gt_pose_path = self._gt_pose_path(cfg)
+        if not os.path.exists(gt_pose_path):
+            raise FileNotFoundError(f'Missing railway GT pose parquet: {gt_pose_path}')
+
+        gt_df = pd.read_parquet(gt_pose_path)
+        required = ['timestamp', 't_x', 't_y', 't_z', 'r_x', 'r_y', 'r_z', 'r_w']
+        missing = [col for col in required if col not in gt_df.columns]
+        if missing:
+            raise ValueError(f'{gt_pose_path} is missing required columns: {missing}')
+
+        gt_timestamps = gt_df['timestamp'].to_numpy(dtype=np.float64)
+        order = np.argsort(gt_timestamps)
+        sorted_timestamps = gt_timestamps[order]
+        tolerance = float(cfg.get('data', {}).get('gt_pose_tolerance_sec', 0.05))
+
+        poses = []
+        matched_indices = []
+        timestamp_errors = []
+        first_inv = None
+        for image_timestamp in self.image_timestamps:
+            pos = int(np.searchsorted(sorted_timestamps, image_timestamp))
+            candidates = []
+            if pos < len(sorted_timestamps):
+                candidates.append(pos)
+            if pos > 0:
+                candidates.append(pos - 1)
+            if not candidates:
+                raise ValueError(f'No GT pose candidate for image timestamp {image_timestamp}')
+            best_pos = min(candidates, key=lambda i: abs(sorted_timestamps[i] - image_timestamp))
+            dt = float(abs(sorted_timestamps[best_pos] - image_timestamp))
+            if dt > tolerance:
+                raise ValueError(
+                    f'No GT pose within {tolerance}s for image timestamp {image_timestamp}; nearest dt={dt}'
+                )
+
+            gt_idx = int(order[best_pos])
+            row = gt_df.iloc[gt_idx]
+            c2w_abs = np.eye(4, dtype=np.float64)
+            c2w_abs[:3, :3] = Rotation.from_quat(
+                [row['r_x'], row['r_y'], row['r_z'], row['r_w']]
+            ).as_matrix()
+            c2w_abs[:3, 3] = [row['t_x'], row['t_y'], row['t_z']]
+            if first_inv is None:
+                first_inv = np.linalg.inv(c2w_abs)
+            poses.append((first_inv @ c2w_abs).astype(np.float32))
+            matched_indices.append(gt_idx)
+            timestamp_errors.append(dt)
+
+        self.gt_pose_path = gt_pose_path
+        self.gt_pose_indices = np.asarray(matched_indices, dtype=np.int64)
+        self.gt_pose_time_errors = np.asarray(timestamp_errors, dtype=np.float64)
+        return poses
+
+    def __getitem__(self, index):
+        color_path = self.color_paths[index]
+        color_data_fullsize = cv2.imread(color_path)
+        if color_data_fullsize is None:
+            raise FileNotFoundError(f'Failed to read railway image: {color_path}')
+        if self.distortion is not None:
+            K = np.eye(3)
+            K[0, 0], K[0, 2], K[1, 1], K[1, 2] = self.fx_orig, self.cx_orig, self.fy_orig, self.cy_orig
+            color_data_fullsize = cv2.undistort(color_data_fullsize, K, self.distortion)
+
+        color_data = cv2.resize(color_data_fullsize, (self.W_out_with_edge, self.H_out_with_edge))
+        color_data = torch.from_numpy(color_data).float().permute(2, 0, 1)[[2, 1, 0], :, :] / 255.0
+        color_data = color_data.unsqueeze(dim=0)
+        depth_data = torch.zeros((self.H_out_with_edge, self.W_out_with_edge), dtype=torch.float32)
+
+        if self.W_edge > 0:
+            edge = self.W_edge
+            color_data = color_data[:, :, :, edge:-edge]
+            depth_data = depth_data[:, edge:-edge]
+
+        if self.H_edge > 0:
+            edge = self.H_edge
+            color_data = color_data[:, :, edge:-edge, :]
+            depth_data = depth_data[edge:-edge, :]
+
+        pose = torch.from_numpy(self.poses[index]).float()
+        return index, color_data, depth_data, pose
+
+
 
 dataset_dict = {
     "replica": Replica,
     "scannet": ScanNet,
     "tumrgbd": TUM_RGBD,
+    "railway": RailwayDataset,
 }

@@ -12,10 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import numpy as np
 from lietorch import SE3
 from src.utils.Printer import FontColor
+
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+# 在 eval_traj.py 文件开头添加
+import os
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端，保存图片到文件
+import matplotlib.pyplot as plt
+
+# 然后再导入 evo
+# from evo.tools import plot
+
+# 确保图片保存目录存在
+# os.makedirs(plot_parent_dir, exist_ok=True)
+
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 
 def align_kf_traj(npz_path,stream,return_full_est_traj=False,printer=None):
     offline_video = dict(np.load(npz_path))

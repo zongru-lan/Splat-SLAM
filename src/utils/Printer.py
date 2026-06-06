@@ -60,6 +60,9 @@ class Printer(TrivialPrinter):
         process.start()
     def print(self,msg:str,color=None):
         msg_prefix = get_msg_prefix(color)
+        # 确保 msg 是字符串类型
+        if not isinstance(msg, str):
+            msg = str(msg)
         msg = msg_prefix + msg + Style.RESET_ALL
         with self.msg_lock:
             self.msg_queue.put(msg)

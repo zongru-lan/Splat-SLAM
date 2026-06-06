@@ -51,9 +51,19 @@ class SLAM:
 
         self.printer = Printer(len(stream))    # use an additional process for printing all the info
 
-        self.load_pretrained(cfg)
-        self.droid_net.to(self.device).eval()
-        self.droid_net.share_memory()
+        self.load_pretrained(cfg)              # load pretrained weights on CPU
+
+
+        # Torch 的 share_memory() only available on CPU
+        # 在移动到 GPU 之前先共享内存
+
+        # 修复前
+        # self.droid_net.to(self.device).eval()  # 先移动到 GPU
+        # self.droid_net.share_memory()          # 后共享内存 (failed)
+
+        # 修复后
+        self.droid_net.share_memory()            # 先共享内存
+        self.droid_net.to(self.device).eval()    # 后移动到 GPU
 
         self.num_running_thread = torch.zeros((1)).int()
         self.num_running_thread.share_memory_()
@@ -66,7 +76,7 @@ class SLAM:
         # post processor - fill in poses for non-keyframes
         self.traj_filler = PoseTrajectoryFiller(net=self.droid_net, video=self.video,
                                                 printer=self.printer, device=self.device)
-        
+
         self.tracker:Tracker = None
         self.mapper:Mapper = None
         self.stream = stream
@@ -98,7 +108,7 @@ class SLAM:
         self.printer.print('Tracking Done!',FontColor.TRACKER)
         if self.only_tracking:
             self.terminate()
-    
+
     def mapping(self, pipe):
         if self.only_tracking:
             self.all_trigered += 1
@@ -108,14 +118,14 @@ class SLAM:
 
         self.all_trigered += 1
         setup_seed(self.cfg["setup_seed"])
-        
+
         while(self.all_trigered < self.num_running_thread):
             pass
         self.mapper.run()
         self.printer.print('Mapping Done!',FontColor.MAPPER)
 
         self.terminate()
-        
+
 
     def backend(self):
         self.printer.print("Final Global BA Triggered!", FontColor.TRACKER)
@@ -129,7 +139,7 @@ class SLAM:
 
     def terminate(self):
         """ fill poses for non-keyframe images and evaluate """
-        
+
         if self.cfg['tracking']['backend']['final_ba'] and self.cfg['mapping']['eval_before_final_ba']:
             self.video.save_video(f"{self.save_dir}/video.npz")
             try:
@@ -140,7 +150,7 @@ class SLAM:
             except Exception as e:
                 self.printer.print(e,FontColor.ERROR)
 
-            if not self.only_tracking: 
+            if not self.only_tracking:
                 # prepare aligned camera list of mapped frames
                 traj_est_aligned = []
                 cams = self.mapper.cameras
@@ -203,22 +213,32 @@ class SLAM:
                 gt_mesh_path=self.cfg['meshing']['gt_mesh_path']
             )
 
-        # evaluate depth error
-        self.printer.print("Evaluate sensor depth error with per frame alignment",FontColor.EVAL)
-        depth_l1, depth_l1_max_4m, coverage = self.video.eval_depth_l1(f"{self.save_dir}/video.npz", self.stream)
-        self.printer.print("Depth L1: " + str(depth_l1), FontColor.EVAL)
-        self.printer.print("Depth L1 mask 4m: " + str(depth_l1_max_4m),FontColor.EVAL)
-        self.printer.print("Average frame coverage: " + str(coverage),FontColor.EVAL)
+        has_gt_depth = getattr(self.stream, 'has_gt_depth', True)
+        if has_gt_depth:
+            # evaluate depth error
+            self.printer.print("Evaluate sensor depth error with per frame alignment",FontColor.EVAL)
+            depth_l1, depth_l1_max_4m, coverage = self.video.eval_depth_l1(f"{self.save_dir}/video.npz", self.stream)
+            self.printer.print("Depth L1: " + str(depth_l1), FontColor.EVAL)
+            self.printer.print("Depth L1 mask 4m: " + str(depth_l1_max_4m),FontColor.EVAL)
+            self.printer.print("Average frame coverage: " + str(coverage),FontColor.EVAL)
 
-        self.printer.print("Evaluate sensor depth error with global alignment",FontColor.EVAL)
-        depth_l1_g, depth_l1_max_4m_g, _ = self.video.eval_depth_l1(f"{self.save_dir}/video.npz", self.stream, global_scale)
-        self.printer.print("Depth L1: " + str(depth_l1_g),FontColor.EVAL)
-        self.printer.print("Depth L1 mask 4m: " + str(depth_l1_max_4m_g),FontColor.EVAL)
+            self.printer.print("Evaluate sensor depth error with global alignment",FontColor.EVAL)
+            depth_l1_g, depth_l1_max_4m_g, _ = self.video.eval_depth_l1(f"{self.save_dir}/video.npz", self.stream, global_scale)
+            self.printer.print("Depth L1: " + str(depth_l1_g),FontColor.EVAL)
+            self.printer.print("Depth L1 mask 4m: " + str(depth_l1_max_4m_g),FontColor.EVAL)
+        else:
+            self.printer.print("Skip sensor depth evaluation: dataset has no GT depth.", FontColor.EVAL)
+            depth_l1 = None
+            depth_l1_g = None
+            depth_l1_max_4m = None
+            depth_l1_max_4m_g = None
+            coverage = None
 
         # save output data to dict
         # File path where you want to save the .txt file
         file_path = f'{self.save_dir}/depth_stats.txt'
         integers = {
+            'depth_eval': 'computed' if has_gt_depth else 'skipped_no_gt_depth',
             'depth_l1': depth_l1,
             'depth_l1_global_scale': depth_l1_g,
             'depth_l1_mask_4m': depth_l1_max_4m,
