@@ -21,5 +21,6 @@ euler/
 output/*
 !output/
 !output/SAVE_CONVENTIONS.md
+!output/RAILWAY_RUN_REPORT_*.md
 logs/
 zongru_modified.txt

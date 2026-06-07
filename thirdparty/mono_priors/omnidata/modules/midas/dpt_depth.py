@@ -37,6 +37,7 @@ class DPT(BaseModel):
         readout="project",
         channels_last=False,
         use_bn=False,
+        pretrained=True,
     ):
 
         super(DPT, self).__init__()
@@ -53,7 +54,7 @@ class DPT(BaseModel):
         self.pretrained, self.scratch = _make_encoder(
             backbone,
             features,
-            True, # Set to true of you want to train from scratch, uses ImageNet weights
+            pretrained,
             groups=1,
             expand=False,
             exportable=False,

@@ -4,6 +4,32 @@ Last updated: 2026-06-06
 
 This document records the clean output convention for running Splat-SLAM on the railway monocular RGB sequences under `/home/leizongru/lzr_ws/railway_data`.
 
+## 0. Cross-Project Implementation Principle
+
+When adapting Splat-SLAM or other VO/SLAM projects to the railway dataset, the preferred strategy is:
+
+```text
+keep the original algorithm flow intact;
+add a project-specific railway result export stage at the normal end of the run;
+expose only the clean user-facing outputs after that export stage succeeds.
+```
+
+For Splat-SLAM, this means we do not rewrite the tracking, mapping, final BA, or Gaussian optimization pipeline just to satisfy output-format requirements. The railway-specific code is attached at the end of `SLAM.terminate()`, after the project has finished building/refining its final map and computing its native evaluations.
+
+The original project is allowed to create whatever internal files it needs while running, such as temporary depth priors, `video.npz`, native trajectory plots, debug renders, or intermediate evaluation folders. The railway export stage then reads the finished internal state, writes the agreed clean outputs, and leaves the sequence directory in the user-facing layout documented below.
+
+For future projects, follow the same adapter pattern:
+
+```text
+1. understand the project's native output and final-state objects;
+2. keep the algorithmic lifecycle unchanged unless a real correctness bug blocks the run;
+3. add a small railway export/adapter layer after the final map/trajectory is available;
+4. save renders, poses, GT associations, coordinate conventions, and metrics in a consistent clean layout;
+5. remove or hide project-specific debug artifacts only after the clean export has succeeded.
+```
+
+This keeps experiments comparable across projects while avoiding risky, unnecessary changes to each method's core algorithm.
+
 ## 1. Output Root
 
 All clean railway run outputs are saved under:

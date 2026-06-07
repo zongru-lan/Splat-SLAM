@@ -62,15 +62,15 @@ class PoseTrajectoryFiller:
         Ps = SE3(self.video.poses[:N])
 
         # found the location of current timestamp in keyframe queue
-        t0 = torch.tensor([ts[ts<=t].shape[0] - 1 for t in timestamps])
+        t0 = torch.tensor([ts[ts<=t].shape[0] - 1 for t in timestamps], device=ts.device)
         t1 = torch.where(t0 < N-1, t0+1, t0)
 
         # time interval between nearby keyframes
-        dt = ts[t1] - ts[t0] + 1e-3
+        dt = (ts[t1] - ts[t0] + 1e-3).to(self.device)
         dP = Ps[t1] * Ps[t0].inv()
 
         v = dP.log() / dt.unsqueeze(dim=-1)
-        w = v * (tt - ts[t0]).unsqueeze(dim=-1)
+        w = v * (tt - ts[t0].to(self.device)).unsqueeze(dim=-1)
         Gs = SE3.exp(w) * Ps[t0]
 
         # extract features (no need for context features)
@@ -83,8 +83,8 @@ class PoseTrajectoryFiller:
 
         graph = FactorGraph(self.video, self.update)
         # build edge between current frame and nearby keyframes for optimization
-        graph.add_factors(t0.cuda(), torch.arange(N, N+M).cuda())
-        graph.add_factors(t1.cuda(), torch.arange(N, N+M).cuda())
+        graph.add_factors(t0.to(self.device), torch.arange(N, N+M, device=self.device))
+        graph.add_factors(t1.to(self.device), torch.arange(N, N+M, device=self.device))
 
         for _ in range(12):
             graph.update(N, N+M, motion_only=True)
